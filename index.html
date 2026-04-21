@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Switchboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #131313; color: #eaeaea; padding: 20px; max-width: 960px; margin: 0 auto; -webkit-text-size-adjust: 100%; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .header { margin-bottom: 24px; }
+  .ram-bar { background: #2b2b2b; border-radius: 6px; height: 28px; margin-top: 10px; position: relative; overflow: hidden; }
+  .ram-bar-fill { height: 100%; border-radius: 6px; transition: width 0.5s; }
+  .ram-bar-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.85rem; font-weight: 600; }
+  .group { background: #1e1e1e; border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
+  .group-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; cursor: pointer; user-select: none; }
+  .group-header:hover { background: #252525; }
+  .group-title { font-size: 1rem; font-weight: 600; }
+  .group-actions { display: flex; gap: 8px; align-items: center; }
+  .group-actions button { padding: 4px 12px; border: none; border-radius: 4px; font-size: 0.75rem; cursor: pointer; font-weight: 600; }
+  .btn-start { background: #2ea043; color: #fff; }
+  .btn-start:hover { background: #3fb950; }
+  .btn-stop { background: #da3633; color: #fff; }
+  .btn-stop:hover { background: #f85149; }
+  .btn-start:disabled, .btn-stop:disabled { opacity: 0.5; cursor: not-allowed; }
+  .chevron { transition: transform 0.2s; font-size: 0.8rem; margin-right: 12px; color: #888; }
+  .chevron.collapsed { transform: rotate(-90deg); }
+  .group-body { padding: 0 16px 8px; }
+  .group-body.collapsed { display: none; }
+  .svc { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #2b2b2b; gap: 8px; }
+  .svc:last-child { border-bottom: none; }
+  .svc-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; flex: 1; }
+  .svc-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .dot-running { background: #2ea043; }
+  .dot-stopped { background: #da3633; }
+  .dot-pending { background: #d29922; }
+  .svc-name { font-size: 0.9rem; }
+  .svc-link { color: #8ab4f8; text-decoration: none; font-size: 0.8rem; opacity: 0.8; }
+  .svc-link:hover { opacity: 1; text-decoration: underline; }
+  .svc-ram { color: #888; font-size: 0.8rem; }
+  .svc-kind { font-size: 0.65rem; color: #666; background: #2b2b2b; padding: 1px 5px; border-radius: 3px; }
+  .svc-node { font-size: 0.65rem; color: #8ab4f8; background: #1f2937; padding: 1px 5px; border-radius: 3px; }
+  .svc-status-detail { font-size: 0.7rem; color: #f85149; background: rgba(248, 81, 73, 0.1); padding: 1px 6px; border-radius: 3px; cursor: help; }
+  .node-row { margin-top: 14px; }
+  .node-circles { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; }
+  .node-circle { position: relative; width: 140px; height: 140px; flex: 0 0 auto; }
+  .node-circle svg { width: 100%; height: 100%; transform: rotate(-90deg); display: block; }
+  .node-ring-bg { stroke: #2b2b2b; fill: none; stroke-width: 7; }
+  .node-ring { fill: none; stroke-width: 7; stroke-linecap: round; transition: stroke-dashoffset 0.5s, stroke 0.3s; }
+  .node-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; text-align: center; padding: 0 10px; }
+  .node-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .node-circle-name { display: flex; align-items: center; gap: 5px; font-size: 0.85rem; font-weight: 600; color: #eaeaea; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .node-circle-metrics { font-size: 0.65rem; color: #aaa; line-height: 1.2; }
+  .node-circle-metrics .sep { color: #555; margin: 0 3px; }
+  .node-cordon-btn { background: none; border: 1px solid #3a3a3a; color: #888; border-radius: 3px; padding: 1px 7px; font-size: 0.65rem; cursor: pointer; }
+  .node-cordon-btn:hover { border-color: #d29922; color: #d29922; }
+  .node-cordon-btn.cordoned { border-color: #d29922; color: #d29922; background: rgba(210, 153, 34, 0.1); }
+  .svc-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .toggle { position: relative; width: 40px; height: 22px; cursor: pointer; }
+  .toggle input { display: none; }
+  .toggle-slider { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #da3633; border-radius: 11px; transition: 0.3s; }
+  .toggle input:checked + .toggle-slider { background: #2ea043; }
+  .toggle-slider::before { content: ''; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.3s; }
+  .toggle input:checked + .toggle-slider::before { transform: translateX(18px); }
+  .toggle.busy .toggle-slider { opacity: 0.5; }
+  .btn-icon { background: none; border: 1px solid #3a3a3a; color: #888; border-radius: 4px; padding: 2px 6px; font-size: 0.7rem; cursor: pointer; line-height: 1.2; }
+  .btn-icon:hover { border-color: #8ab4f8; color: #8ab4f8; }
+  .btn-icon:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-restart { background: none; border: 1px solid #555; color: #aaa; border-radius: 4px; padding: 2px 6px; font-size: 0.7rem; cursor: pointer; }
+  .btn-restart:hover { border-color: #d29922; color: #d29922; }
+  .btn-restart:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-pin { background: none; border: 1px solid #3a3a3a; color: #888; border-radius: 4px; padding: 2px 6px; font-size: 0.65rem; cursor: pointer; }
+  .btn-pin:hover { border-color: #8ab4f8; color: #8ab4f8; }
+  .btn-pin.active { border-color: #8ab4f8; color: #8ab4f8; background: rgba(138, 180, 248, 0.08); }
+  .btn-pin:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-toggle-all { background: none; border: 1px solid #444; color: #888; border-radius: 4px; padding: 3px 10px; font-size: 0.75rem; cursor: pointer; }
+  .btn-toggle-all:hover { border-color: #666; color: #ccc; }
+  .error-toast { position: fixed; top: 20px; right: 20px; background: #da3633; color: #fff; padding: 12px 20px; border-radius: 6px; display: none; z-index: 100; font-size: 0.9rem; }
+  .status-count { font-size: 0.8rem; color: #888; }
+  .filter-row { display: flex; gap: 6px; align-items: center; margin: 12px 0 4px; flex-wrap: wrap; font-size: 0.75rem; }
+  .filter-label { color: #888; }
+  .filter-chip { background: #1e1e1e; border: 1px solid #2b2b2b; color: #aaa; border-radius: 12px; padding: 3px 10px; cursor: pointer; font-size: 0.75rem; }
+  .filter-chip:hover { border-color: #8ab4f8; color: #8ab4f8; }
+  .filter-chip.active { background: rgba(138, 180, 248, 0.15); border-color: #8ab4f8; color: #8ab4f8; }
+
+  @media (max-width: 600px) {
+    body { padding: 12px; }
+    h1 { font-size: 1.2rem; }
+    .header { margin-bottom: 16px; }
+    .group-header { padding: 10px 12px; }
+    .group-body { padding: 0 12px 6px; }
+    .node-circles { gap: 10px; }
+    .node-circle { width: 120px; height: 120px; }
+    .node-circle-name { font-size: 0.75rem; }
+    .node-circle-metrics { font-size: 0.6rem; }
+    .svc { flex-wrap: wrap; gap: 6px; }
+    .svc-info { width: 100%; flex: 1 1 100%; }
+    .svc-right { width: 100%; justify-content: flex-end; }
+    .btn-pin { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .error-toast { top: 10px; right: 10px; left: 10px; font-size: 0.85rem; }
+    .ram-bar { height: 24px; }
+    .ram-bar-text { font-size: 0.75rem; }
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <h1>Switchboard</h1>
+    <button class="btn-toggle-all" id="toggleAllBtn" onclick="toggleAll()">Expand</button>
+  </div>
+  <div class="ram-bar">
+    <div class="ram-bar-fill" id="ramFill" style="width:0%; background:#2ea043;"></div>
+    <span class="ram-bar-text" id="ramText">Loading...</span>
+  </div>
+  <div class="ram-bar" style="margin-top:6px;">
+    <div class="ram-bar-fill" id="cpuFill" style="width:0%; background:#2ea043;"></div>
+    <span class="ram-bar-text" id="cpuText">CPU: loading...</span>
+  </div>
+  <div class="node-row" id="nodeRow"></div>
+  <div class="filter-row" id="filterRow" style="display:none;"></div>
+</div>
+<div id="groups"></div>
+<div class="error-toast" id="errorToast"></div>
+
+<script>
+let state = { services: [], nodes: [], ramUsed: 0, ramTotal: 0 };
+let collapsed = null;
+let busyServices = {};
+let busyNodes = {};
+let nodeFilter = null;
+
+function setNodeFilter(node) {
+  nodeFilter = node;
+  render();
+}
+
+async function fetchServices() {
+  try {
+    const res = await fetch('/api/services');
+    if (!res.ok) throw new Error('Failed to fetch');
+    state = await res.json();
+    if (collapsed === null) {
+      collapsed = {};
+      const seen = {};
+      (state.services || []).forEach(s => {
+        if (!seen[s.group]) {
+          seen[s.group] = true;
+          collapsed[s.group] = true;
+        }
+      });
+    }
+    render();
+  } catch (e) {
+    showError('Cannot reach Switchboard API');
+  }
+}
+
+function showError(msg) {
+  const el = document.getElementById('errorToast');
+  el.textContent = msg;
+  el.style.display = 'block';
+  setTimeout(() => el.style.display = 'none', 4000);
+}
+
+async function apiCall(url, body, svcKey) {
+  if (svcKey) { busyServices[svcKey] = true; render(); }
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (res.status === 401 || res.status === 403) {
+      window.location.reload();
+      return;
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Request failed');
+    }
+    await fetchServices();
+  } catch (e) {
+    showError(e.message);
+  } finally {
+    if (svcKey) { delete busyServices[svcKey]; render(); }
+  }
+}
+
+function scaleService(ns, name, replicas) {
+  return apiCall('/api/services/scale', { namespace: ns, name, replicas }, ns + '/' + name);
+}
+
+function restartService(ns, name) {
+  return apiCall('/api/services/restart', { namespace: ns, name }, ns + '/' + name);
+}
+
+function scaleGroup(group, replicas) {
+  return apiCall('/api/groups/scale', { group, replicas }, 'group:' + group);
+}
+
+async function rebalance() {
+  if (!confirm('Spread every running service across schedulable nodes? This overwrites existing preferred-node pins.')) return;
+  busyNodes['__rebalance'] = true;
+  render();
+  try {
+    const res = await fetch('/api/nodes/rebalance', { method: 'POST' });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Rebalance failed');
+    }
+    await fetchServices();
+  } catch (e) {
+    showError(e.message);
+  } finally {
+    delete busyNodes['__rebalance'];
+    render();
+  }
+}
+
+function cyclePreferredNode(ns, name, current) {
+  const nodeNames = (state.nodes || []).map(n => n.name);
+  if (nodeNames.length < 2) return;
+  const sequence = [''].concat(nodeNames);
+  const idx = sequence.indexOf(current || '');
+  const next = sequence[(idx + 1) % sequence.length];
+  return apiCall('/api/services/preferred-node', { namespace: ns, name, node: next }, ns + '/' + name);
+}
+
+async function toggleCordon(node, cordoned) {
+  busyNodes[node] = true;
+  render();
+  try {
+    const res = await fetch('/api/nodes/cordon', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ node, cordon: !cordoned })
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(body || 'Cordon failed');
+    }
+    await fetchServices();
+  } catch (e) {
+    showError(e.message);
+  } finally {
+    delete busyNodes[node];
+    render();
+  }
+}
+
+function formatMB(bytes) {
+  if (bytes === 0) return '0 MB';
+  return (bytes / 1024 / 1024).toFixed(0) + ' MB';
+}
+
+function formatCPU(milli) {
+  if (!milli || milli <= 0) return '0m';
+  if (milli >= 1000) return (milli / 1000).toFixed(2) + ' cores';
+  return milli + 'm';
+}
+
+function ramColor(pct) {
+  return pct > 85 ? '#da3633' : pct > 70 ? '#d29922' : '#2ea043';
+}
+
+function cpuColor(pct) {
+  return pct > 85 ? '#da3633' : pct > 70 ? '#d29922' : '#3b82f6';
+}
+
+function escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function render() {
+  const pct = state.ramTotal > 0 ? (state.ramUsed / state.ramTotal * 100) : 0;
+  const fill = document.getElementById('ramFill');
+  fill.style.width = pct.toFixed(1) + '%';
+  fill.style.background = ramColor(pct);
+  document.getElementById('ramText').textContent = 'RAM: ' + formatMB(state.ramUsed) + ' / ' + formatMB(state.ramTotal) + ' (' + pct.toFixed(1) + '%)';
+
+  const cpuPct = state.cpuTotal > 0 ? (state.cpuUsed / state.cpuTotal * 100) : 0;
+  const cpuFill = document.getElementById('cpuFill');
+  cpuFill.style.width = cpuPct.toFixed(1) + '%';
+  cpuFill.style.background = cpuColor(cpuPct);
+  document.getElementById('cpuText').textContent = 'CPU: ' + formatCPU(state.cpuUsed) + ' / ' + formatCPU(state.cpuTotal) + ' (' + cpuPct.toFixed(1) + '%)';
+
+  const nodeRow = document.getElementById('nodeRow');
+  const nodes = state.nodes || [];
+  if (nodes.length > 1) {
+    const OUTER_R = 45, INNER_R = 35;
+    const outerC = 2 * Math.PI * OUTER_R;
+    const innerC = 2 * Math.PI * INNER_R;
+    let nodeHtml = '<div class="node-circles">';
+    nodes.forEach(n => {
+      const ramPct = n.ramTotal > 0 ? (n.ramUsed / n.ramTotal * 100) : 0;
+      const cpuPct = n.cpuTotal > 0 ? (n.cpuUsed / n.cpuTotal * 100) : 0;
+      const dotColor = n.ready ? '#2ea043' : '#da3633';
+      const cordonLabel = n.unschedulable ? 'uncordon' : 'cordon';
+      const cordonClass = n.unschedulable ? 'cordoned' : '';
+      const busy = busyNodes[n.name] ? 'disabled' : '';
+      const ramOffset = outerC * (1 - Math.min(ramPct, 100) / 100);
+      const cpuOffset = innerC * (1 - Math.min(cpuPct, 100) / 100);
+      const tooltip = 'RAM ' + formatMB(n.ramUsed) + ' / ' + formatMB(n.ramTotal) +
+                      '\nCPU ' + formatCPU(n.cpuUsed) + ' / ' + formatCPU(n.cpuTotal);
+      nodeHtml += '<div class="node-circle" title="' + escapeHtml(tooltip) + '">';
+      nodeHtml += '<svg viewBox="0 0 100 100">';
+      nodeHtml += '<circle class="node-ring-bg" cx="50" cy="50" r="' + OUTER_R + '"/>';
+      nodeHtml += '<circle class="node-ring-bg" cx="50" cy="50" r="' + INNER_R + '"/>';
+      nodeHtml += '<circle class="node-ring" cx="50" cy="50" r="' + OUTER_R + '"' +
+        ' stroke="' + ramColor(ramPct) + '"' +
+        ' stroke-dasharray="' + outerC.toFixed(2) + '"' +
+        ' stroke-dashoffset="' + ramOffset.toFixed(2) + '"/>';
+      nodeHtml += '<circle class="node-ring" cx="50" cy="50" r="' + INNER_R + '"' +
+        ' stroke="' + cpuColor(cpuPct) + '"' +
+        ' stroke-dasharray="' + innerC.toFixed(2) + '"' +
+        ' stroke-dashoffset="' + cpuOffset.toFixed(2) + '"/>';
+      nodeHtml += '</svg>';
+      nodeHtml += '<div class="node-center">';
+      nodeHtml += '<div class="node-circle-name">';
+      nodeHtml += '<span class="node-dot" style="background:' + dotColor + '"></span>';
+      nodeHtml += escapeHtml(n.name);
+      nodeHtml += '</div>';
+      nodeHtml += '<div class="node-circle-metrics">';
+      nodeHtml += '<span style="color:' + ramColor(ramPct) + '">RAM ' + ramPct.toFixed(0) + '%</span>';
+      nodeHtml += '<span class="sep">·</span>';
+      nodeHtml += '<span style="color:' + cpuColor(cpuPct) + '">CPU ' + cpuPct.toFixed(0) + '%</span>';
+      nodeHtml += '</div>';
+      nodeHtml += '<button class="node-cordon-btn ' + cordonClass + '" ' + busy +
+        ' onclick="toggleCordon(\'' + escapeHtml(n.name) + '\',' + (n.unschedulable ? 'true' : 'false') + ')">' + cordonLabel + '</button>';
+      nodeHtml += '</div></div>';
+    });
+    nodeHtml += '</div>';
+    nodeRow.innerHTML = nodeHtml;
+  } else {
+    nodeRow.innerHTML = '';
+  }
+
+  const multiNode = (state.nodes || []).length > 1;
+
+  const filterRow = document.getElementById('filterRow');
+  if (multiNode) {
+    const validNodes = nodes.map(n => n.name);
+    if (nodeFilter && !validNodes.includes(nodeFilter)) nodeFilter = null;
+    let filterHtml = '<span class="filter-label">Node:</span>';
+    filterHtml += '<button class="filter-chip ' + (nodeFilter === null ? 'active' : '') + '" onclick="setNodeFilter(null)">all</button>';
+    nodes.forEach(n => {
+      const active = nodeFilter === n.name ? 'active' : '';
+      filterHtml += '<button class="filter-chip ' + active + '" onclick="setNodeFilter(\'' + escapeHtml(n.name) + '\')">' + escapeHtml(n.name) + '</button>';
+    });
+    filterHtml += '<span style="flex:1;"></span>';
+    const rebalanceBusy = busyNodes['__rebalance'];
+    filterHtml += '<button class="filter-chip" ' + (rebalanceBusy ? 'disabled' : '') + ' onclick="rebalance()" title="Assign a preferred node to every running service, balancing by RAM">Spread evenly</button>';
+    filterRow.innerHTML = filterHtml;
+    filterRow.style.display = 'flex';
+  } else {
+    filterRow.style.display = 'none';
+    nodeFilter = null;
+  }
+
+  const visibleServices = (state.services || []).filter(s => {
+    if (!nodeFilter) return true;
+    return (s.nodes || []).includes(nodeFilter);
+  });
+
+  const groups = {};
+  visibleServices.forEach(s => {
+    if (!groups[s.group]) groups[s.group] = [];
+    groups[s.group].push(s);
+  });
+
+  let html = '';
+  for (const [group, svcs] of Object.entries(groups)) {
+    const running = svcs.filter(s => s.replicas > 0).length;
+    const total = svcs.length;
+    const groupRAM = svcs.reduce((sum, s) => sum + (s.ramBytes || 0), 0);
+    const isCollapsed = collapsed[group];
+    const groupBusy = busyServices['group:' + group];
+
+    html += '<div class="group">';
+    html += '<div class="group-header" onclick="toggleGroup(\'' + escapeHtml(group) + '\')">';
+    html += '<div style="display:flex;align-items:center;gap:8px;">';
+    html += '<span class="chevron ' + (isCollapsed ? 'collapsed' : '') + '">&#9660;</span>';
+    html += '<span class="group-title">' + escapeHtml(group) + '</span>';
+    html += '<span class="status-count">' + running + '/' + total + ' running';
+    if (groupRAM > 0) html += ' &middot; ' + formatMB(groupRAM);
+    html += '</span>';
+    html += '</div>';
+    const stoppable = svcs.filter(s => s.canStop);
+    const stoppableRunning = stoppable.filter(s => s.replicas > 0).length;
+    const allRunning = stoppableRunning === stoppable.length;
+    const allStopped = stoppableRunning === 0;
+    html += '<div class="group-actions">';
+    // Hide bulk Start/Stop when filtering by node: scaleGroup acts on the whole
+    // group, which would surprise the user by touching services not currently
+    // visible in the filtered view.
+    if (!nodeFilter) {
+      if (stoppable.length > 0 && !allRunning) {
+        html += '<button class="btn-start" ' + (groupBusy ? 'disabled' : '') + ' onclick="event.stopPropagation();scaleGroup(\'' + escapeHtml(group) + '\',1)">Start</button>';
+      }
+      if (stoppable.length > 0 && !allStopped) {
+        html += '<button class="btn-stop" ' + (groupBusy ? 'disabled' : '') + ' onclick="event.stopPropagation();scaleGroup(\'' + escapeHtml(group) + '\',0)">Stop</button>';
+      }
+    }
+    html += '</div></div>';
+
+    html += '<div class="group-body ' + (isCollapsed ? 'collapsed' : '') + '">';
+    svcs.forEach(s => {
+      const key = s.namespace + '/' + s.name;
+      const busy = busyServices[key];
+      const isRunning = s.replicas > 0;
+      const dotClass = s.ready ? 'dot-running' : (isRunning ? 'dot-pending' : 'dot-stopped');
+
+      html += '<div class="svc">';
+      html += '<div class="svc-info">';
+      html += '<span class="svc-dot ' + dotClass + '"></span>';
+      html += '<span class="svc-name">' + escapeHtml(s.displayName) + '</span>';
+      if (s.urls && s.urls.length > 0) {
+        const primary = s.urls[0];
+        const allHosts = s.urls.join(', ');
+        html += '<a class="svc-link" href="https://' + escapeHtml(primary) + '" target="_blank" rel="noopener"' +
+          ' title="' + escapeHtml(allHosts) + '" onclick="event.stopPropagation()">&#8599;</a>';
+      }
+      if (s.kind && s.kind !== 'Deployment') html += '<span class="svc-kind">' + escapeHtml(s.kind) + '</span>';
+      if (multiNode && s.nodes && s.nodes.length > 0) {
+        html += '<span class="svc-node">' + escapeHtml(s.nodes.join(', ')) + '</span>';
+      }
+      if (s.statusDetail) {
+        html += '<span class="svc-status-detail" title="' + escapeHtml(s.statusDetail) + '">' + escapeHtml(s.statusDetail.split(':')[0]) + '</span>';
+      }
+      if (s.ramBytes > 0) html += '<span class="svc-ram">' + formatMB(s.ramBytes) + '</span>';
+      if (s.cpuMilli > 0) html += '<span class="svc-ram">' + formatCPU(s.cpuMilli) + '</span>';
+      html += '</div>';
+      const canStop = s.canStop !== false;
+      const showPin = multiNode && (s.kind !== 'DaemonSet');
+      html += '<div class="svc-right">';
+      if (showPin) {
+        const pinLabel = s.preferredNode ? '&#128204; ' + escapeHtml(s.preferredNode) : '&#128204; auto';
+        const pinActive = s.preferredNode ? 'active' : '';
+        html += '<button class="btn-pin ' + pinActive + '" ' + (busy ? 'disabled' : '') +
+          ' title="Toggle preferred node"' +
+          ' onclick="cyclePreferredNode(\'' + s.namespace + '\',\'' + s.name + '\',\'' + (s.preferredNode || '') + '\')">' +
+          pinLabel + '</button>';
+      }
+      if (isRunning) {
+        html += '<button class="btn-restart" ' + (busy ? 'disabled' : '') + ' onclick="restartService(\'' + s.namespace + '\',\'' + s.name + '\')">restart</button>';
+      }
+      if (canStop) {
+        html += '<label class="toggle ' + (busy ? 'busy' : '') + '">';
+        html += '<input type="checkbox" ' + (isRunning ? 'checked' : '') + ' ' + (busy ? 'disabled' : '') + ' onchange="scaleService(\'' + s.namespace + '\',\'' + s.name + '\',' + (isRunning ? '0' : '1') + ')">';
+        html += '<span class="toggle-slider"></span>';
+        html += '</label>';
+      }
+      html += '</div></div>';
+    });
+    html += '</div></div>';
+  }
+  document.getElementById('groups').innerHTML = html;
+  const allCollapsed = Object.values(collapsed).every(v => v);
+  document.getElementById('toggleAllBtn').textContent = allCollapsed ? 'Expand' : 'Collapse';
+}
+
+function toggleGroup(group) {
+  collapsed[group] = !collapsed[group];
+  render();
+}
+
+function toggleAll() {
+  const allCollapsed = Object.values(collapsed).every(v => v);
+  for (const g in collapsed) {
+    collapsed[g] = !allCollapsed;
+  }
+  render();
+}
+
+fetchServices();
+setInterval(fetchServices, 10000);
+</script>
+</body>
+</html>

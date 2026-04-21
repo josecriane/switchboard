@@ -1,0 +1,16 @@
+# Go
+/switchboard
+*.test
+*.out
+vendor/
+
+# Nix
+/result
+/result-*
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store

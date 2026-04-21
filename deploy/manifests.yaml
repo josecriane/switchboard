@@ -1,0 +1,108 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: switchboard
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: switchboard-config
+  namespace: switchboard
+data:
+  services.json: |
+    {
+      "groupNames": {},
+      "noStop": [],
+      "hide": []
+    }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: switchboard
+  namespace: switchboard
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: switchboard
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale", "statefulsets/scale"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: ["traefik.io", "traefik.containo.us"]
+    resources: ["ingressroutes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: switchboard
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: switchboard
+subjects:
+  - kind: ServiceAccount
+    name: switchboard
+    namespace: switchboard
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: switchboard
+  namespace: switchboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: switchboard
+  template:
+    metadata:
+      labels:
+        app: switchboard
+    spec:
+      serviceAccountName: switchboard
+      containers:
+        - name: switchboard
+          image: ghcr.io/josecriane/switchboard:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+      volumes:
+        - name: config
+          configMap:
+            name: switchboard-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: switchboard
+  namespace: switchboard
+spec:
+  selector:
+    app: switchboard
+  ports:
+    - port: 8080
+      targetPort: 8080
