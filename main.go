@@ -379,10 +379,22 @@ type workloadUsage struct {
 func matchPodsToWorkloads(podInfos map[string]podInfo, pods []podMetric, deploymentNames map[string]bool) map[string]*workloadUsage {
 	usage := make(map[string]*workloadUsage)
 
+	// Try the longest workload-name prefix first so pods like `loki-canary-xyz`
+	// match the `loki-canary` DaemonSet instead of leaking into the `loki`
+	// StatefulSet. Random map iteration would otherwise flip the assignment
+	// between renders.
+	sortedKeys := make([]string, 0, len(deploymentNames))
+	for k := range deploymentNames {
+		sortedKeys = append(sortedKeys, k)
+	}
+	sort.Slice(sortedKeys, func(i, j int) bool {
+		return len(sortedKeys[i]) > len(sortedKeys[j])
+	})
+
 	// Walk all pods once to aggregate RAM + nodes + worst status per workload.
 	// podInfos covers every pod (metrics might miss some); we iterate both.
 	matchPod := func(ns, podName string) (string, bool) {
-		for key := range deploymentNames {
+		for _, key := range sortedKeys {
 			parts := strings.SplitN(key, "/", 2)
 			if parts[0] != ns {
 				continue
@@ -1004,11 +1016,134 @@ func handleCordonNode(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-// setPreferredNode writes both the homelab.k8s/preferred-node annotation
+// operatorOwner tracks a prometheus-operator CR that owns a StatefulSet.
+// Patching the StatefulSet's nodeAffinity gets reverted on the next operator
+// reconcile, so we patch the CR's spec.affinity and let the operator propagate.
+type operatorOwner struct {
+	apiPath string
+	kind    string
+	name    string
+}
+
+// findOperatorOwner returns the owning prometheus-operator CR (Prometheus,
+// Alertmanager, ThanosRuler) when the given StatefulSet is managed by one.
+func findOperatorOwner(ns, kind, name string) (*operatorOwner, bool) {
+	if kind != "StatefulSet" {
+		return nil, false
+	}
+	resp, err := k8sRequest("GET",
+		fmt.Sprintf("/apis/apps/v1/namespaces/%s/statefulsets/%s", ns, name), nil)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	var sts struct {
+		Metadata struct {
+			OwnerReferences []struct {
+				APIVersion string `json:"apiVersion"`
+				Kind       string `json:"kind"`
+				Name       string `json:"name"`
+			} `json:"ownerReferences"`
+		} `json:"metadata"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&sts); err != nil {
+		return nil, false
+	}
+	for _, o := range sts.Metadata.OwnerReferences {
+		if !strings.HasPrefix(o.APIVersion, "monitoring.coreos.com/") {
+			continue
+		}
+		var resource string
+		switch o.Kind {
+		case "Prometheus":
+			resource = "prometheuses"
+		case "Alertmanager":
+			resource = "alertmanagers"
+		case "ThanosRuler":
+			resource = "thanosrulers"
+		default:
+			continue
+		}
+		return &operatorOwner{
+			apiPath: fmt.Sprintf("/apis/%s/namespaces/%s/%s/%s", o.APIVersion, ns, resource, o.Name),
+			kind:    o.Kind,
+			name:    o.Name,
+		}, true
+	}
+	return nil, false
+}
+
+// patchOperatorAffinity merges nodeAffinity into the CR's spec.affinity,
+// preserving any existing podAntiAffinity/podAffinity set by the chart.
+func patchOperatorAffinity(apiPath string, node string) error {
+	resp, err := k8sRequest("GET", apiPath, nil)
+	if err != nil {
+		return fmt.Errorf("fetch CR: %w", err)
+	}
+	var cr struct {
+		Spec struct {
+			Affinity map[string]interface{} `json:"affinity"`
+		} `json:"spec"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
+		resp.Body.Close()
+		return fmt.Errorf("decode CR: %w", err)
+	}
+	resp.Body.Close()
+
+	if cr.Spec.Affinity == nil {
+		cr.Spec.Affinity = map[string]interface{}{}
+	}
+	if node == "" {
+		delete(cr.Spec.Affinity, "nodeAffinity")
+	} else {
+		cr.Spec.Affinity["nodeAffinity"] = map[string]interface{}{
+			"preferredDuringSchedulingIgnoredDuringExecution": []map[string]interface{}{{
+				"weight": 100,
+				"preference": map[string]interface{}{
+					"matchExpressions": []map[string]interface{}{{
+						"key":      "kubernetes.io/hostname",
+						"operator": "In",
+						"values":   []string{node},
+					}},
+				},
+			}},
+		}
+	}
+
+	var affinityValue interface{} = cr.Spec.Affinity
+	if len(cr.Spec.Affinity) == 0 {
+		affinityValue = nil
+	}
+	payload, err := json.Marshal(map[string]interface{}{
+		"spec": map[string]interface{}{"affinity": affinityValue},
+	})
+	if err != nil {
+		return fmt.Errorf("marshal patch: %w", err)
+	}
+	resp2, err := k8sRequest("PATCH", apiPath, strings.NewReader(string(payload)))
+	if err != nil {
+		return fmt.Errorf("patch CR: %w", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp2.Body)
+		return fmt.Errorf("CR patch failed (%d): %s", resp2.StatusCode, string(body))
+	}
+	return nil
+}
+
+// setPreferredNode writes both the switchboard.io/preferred-node annotation
 // (survives as documentation) and the matching soft nodeAffinity on the pod
 // template (takes scheduling effect). On rebuild the setup scripts re-apply
 // the Deployment, so service-scaledown re-patches the affinity from the
 // annotation to keep scheduling intent across rebuilds.
+//
+// For StatefulSets managed by prometheus-operator (Prometheus, Alertmanager,
+// ThanosRuler), the operator reverts direct StatefulSet affinity patches on
+// every reconcile. We detect those via ownerReferences and patch the owning
+// CR's spec.affinity instead — merging nodeAffinity with any existing
+// podAntiAffinity so chart defaults survive.
 func setPreferredNode(ns, name, node string) error {
 	kind := findWorkloadKind(ns, name)
 	if kind == "DaemonSet" {
@@ -1026,6 +1161,23 @@ func setPreferredNode(ns, name, node string) error {
 			`{"nodeAffinity":{"preferredDuringSchedulingIgnoredDuringExecution":[{"weight":100,"preference":{"matchExpressions":[{"key":"kubernetes.io/hostname","operator":"In","values":["%s"]}]}}]}}`,
 			node)
 	}
+
+	if owner, ok := findOperatorOwner(ns, kind, name); ok {
+		annPayload := fmt.Sprintf(`{"metadata":{"annotations":{"%s":%s}}}`, PreferredNodeAnnotation, annotationVal)
+		resp, err := k8sRequest("PATCH",
+			fmt.Sprintf("/apis/apps/v1/namespaces/%s/%s/%s", ns, resource, name),
+			strings.NewReader(annPayload))
+		if err != nil {
+			return fmt.Errorf("annotation patch error: %w", err)
+		}
+		resp.Body.Close()
+		if err := patchOperatorAffinity(owner.apiPath, node); err != nil {
+			return err
+		}
+		log.Printf("Service %s/%s preferred node set to %q (via %s/%s)", ns, name, node, owner.kind, owner.name)
+		return nil
+	}
+
 	payload := fmt.Sprintf(
 		`{"metadata":{"annotations":{"%s":%s}},"spec":{"template":{"spec":{"affinity":%s}}}}`,
 		PreferredNodeAnnotation, annotationVal, affinity)
