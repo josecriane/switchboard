@@ -23,6 +23,12 @@ type Config struct {
 	GroupNames map[string]string `json:"groupNames"`
 	NoStop     []string          `json:"noStop"`
 	Hide       []string          `json:"hide"`
+	Machines   []MachineConfig   `json:"machines"`
+}
+
+type MachineConfig struct {
+	Name         string `json:"name"`
+	PowerControl bool   `json:"powerControl"`
 }
 
 type ServiceStatus struct {
@@ -40,6 +46,16 @@ type ServiceStatus struct {
 	URLs          []string `json:"urls"`
 	StatusDetail  string   `json:"statusDetail"`
 	PreferredNode string   `json:"preferredNode"`
+	Version       string   `json:"version"`
+	Images        []string `json:"images"`
+}
+
+type MachineStatus struct {
+	Name         string `json:"name"`
+	PowerControl bool   `json:"powerControl"`
+	Desired      string `json:"desired"`
+	State        string `json:"state"`
+	Detail       string `json:"detail"`
 }
 
 type NodeStatus struct {
@@ -55,6 +71,7 @@ type NodeStatus struct {
 type ServicesResponse struct {
 	Services []ServiceStatus `json:"services"`
 	Nodes    []NodeStatus    `json:"nodes"`
+	Machines []MachineStatus `json:"machines"`
 	RAMUsed  int64           `json:"ramUsed"`
 	RAMTotal int64           `json:"ramTotal"`
 	CPUUsed  int64           `json:"cpuUsed"`
@@ -83,17 +100,25 @@ type PreferredNodeRequest struct {
 	Node      string `json:"node"`
 }
 
+type PowerRequest struct {
+	Name  string `json:"name"`
+	State string `json:"state"`
+}
+
 const (
 	PausedAnnotation        = "switchboard.io/user-paused"
 	PreferredNodeAnnotation = "switchboard.io/preferred-node"
+	PowerConfigMap          = "switchboard-power"
+	PowerStatusSuffix       = ".status"
 )
 
 var (
-	k8sHost   string
-	k8sHTTP   *http.Client
-	cfg       Config
-	mu        sync.Mutex
-	hostRegex = regexp.MustCompile("Host\\(([^)]+)\\)")
+	k8sHost      string
+	k8sHTTP      *http.Client
+	cfg          Config
+	mu           sync.Mutex
+	hostRegex    = regexp.MustCompile("Host\\(([^)]+)\\)")
+	podNamespace string
 )
 
 func init() {
@@ -102,6 +127,7 @@ func init() {
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	k8sHTTP = &http.Client{Transport: tr, Timeout: 10 * time.Second}
+	podNamespace = loadNamespace()
 }
 
 func loadToken() string {
@@ -109,6 +135,15 @@ func loadToken() string {
 	if err != nil {
 		log.Printf("Warning: cannot read SA token: %v", err)
 		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func loadNamespace() string {
+	data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	if err != nil {
+		log.Printf("Warning: cannot read SA namespace, assuming switchboard: %v", err)
+		return "switchboard"
 	}
 	return strings.TrimSpace(string(data))
 }
@@ -121,7 +156,7 @@ func loadConfig() {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		log.Fatalf("Invalid services.json: %v", err)
 	}
-	log.Printf("Loaded config: %d group overrides, %d noStop rules, %d hidden", len(cfg.GroupNames), len(cfg.NoStop), len(cfg.Hide))
+	log.Printf("Loaded config: %d group overrides, %d noStop rules, %d hidden, %d machines", len(cfg.GroupNames), len(cfg.NoStop), len(cfg.Hide), len(cfg.Machines))
 }
 
 func k8sRequest(method, path string, body io.Reader) (*http.Response, error) {
@@ -186,6 +221,11 @@ func deploymentDisplayName(name string) string {
 	return strings.Join(parts, " ")
 }
 
+type k8sContainer struct {
+	Name  string `json:"name"`
+	Image string `json:"image"`
+}
+
 type k8sWorkload struct {
 	Kind     string `json:"kind"`
 	Metadata struct {
@@ -195,10 +235,51 @@ type k8sWorkload struct {
 	} `json:"metadata"`
 	Spec struct {
 		Replicas *int `json:"replicas"`
+		Template struct {
+			Spec struct {
+				Containers []k8sContainer `json:"containers"`
+			} `json:"spec"`
+		} `json:"template"`
 	} `json:"spec"`
 	Status struct {
 		ReadyReplicas int `json:"readyReplicas"`
 	} `json:"status"`
+}
+
+func imageTag(image string) string {
+	digest := ""
+	if i := strings.Index(image, "@"); i >= 0 {
+		digest = image[i+1:]
+		image = image[:i]
+	}
+	if colon := strings.LastIndex(image, ":"); colon > strings.LastIndex(image, "/") {
+		return image[colon+1:]
+	}
+	if digest != "" {
+		if j := strings.Index(digest, ":"); j >= 0 {
+			digest = digest[j+1:]
+		}
+		if len(digest) > 12 {
+			digest = digest[:12]
+		}
+		return digest
+	}
+	return "latest"
+}
+
+func workloadVersion(name string, containers []k8sContainer) (string, []string) {
+	if len(containers) == 0 {
+		return "", nil
+	}
+	primary := containers[0]
+	images := make([]string, 0, len(containers))
+	for _, c := range containers {
+		if c.Name == name {
+			primary = c
+		}
+		images = append(images, c.Name+": "+c.Image)
+	}
+	return imageTag(primary.Image), images
 }
 
 func listWorkloads(apiPath, kind string) []k8sWorkload {
@@ -709,6 +790,7 @@ func handleGetServices(w http.ResponseWriter, r *http.Request) {
 			nodeList = sortedKeys(u.Nodes)
 			detail = u.StatusDetail
 		}
+		version, images := workloadVersion(d.Metadata.Name, d.Spec.Template.Spec.Containers)
 		statuses = append(statuses, ServiceStatus{
 			DisplayName:   deploymentDisplayName(d.Metadata.Name),
 			Name:          d.Metadata.Name,
@@ -724,6 +806,8 @@ func handleGetServices(w http.ResponseWriter, r *http.Request) {
 			URLs:          ingressHosts[key],
 			StatusDetail:  detail,
 			PreferredNode: d.Metadata.Annotations[PreferredNodeAnnotation],
+			Version:       version,
+			Images:        images,
 		})
 	}
 
@@ -744,6 +828,7 @@ func handleGetServices(w http.ResponseWriter, r *http.Request) {
 	resp := ServicesResponse{
 		Services: statuses,
 		Nodes:    nodes,
+		Machines: listMachines(nodes),
 		RAMUsed:  totalRAMUsed,
 		RAMTotal: totalRAMCap,
 		CPUUsed:  totalCPUUsed,
@@ -975,6 +1060,165 @@ func handleRestartService(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func powerConfigPath() string {
+	return fmt.Sprintf("/api/v1/namespaces/%s/configmaps/%s", podNamespace, PowerConfigMap)
+}
+
+func readPowerConfig() map[string]string {
+	resp, err := k8sRequest("GET", powerConfigPath(), nil)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil
+	}
+	var cm struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&cm); err != nil {
+		return nil
+	}
+	return cm.Data
+}
+
+func writePowerDesired(name, state string) error {
+	var value any
+	if state != "auto" {
+		value = state
+	}
+	patch, err := json.Marshal(map[string]any{"data": map[string]any{name: value}})
+	if err != nil {
+		return fmt.Errorf("marshal patch: %w", err)
+	}
+	resp, err := k8sRequest("PATCH", powerConfigPath(), strings.NewReader(string(patch)))
+	if err != nil {
+		return fmt.Errorf("k8s API error: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		return createPowerConfig(name, value)
+	}
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("power patch failed (%d): %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+func createPowerConfig(name string, value any) error {
+	data := map[string]any{}
+	if value != nil {
+		data[name] = value
+	}
+	body, err := json.Marshal(map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata":   map[string]any{"name": PowerConfigMap, "namespace": podNamespace},
+		"data":       data,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal configmap: %w", err)
+	}
+	resp, err := k8sRequest("POST", fmt.Sprintf("/api/v1/namespaces/%s/configmaps", podNamespace), strings.NewReader(string(body)))
+	if err != nil {
+		return fmt.Errorf("k8s API error: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		out, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("power configmap create failed (%d): %s", resp.StatusCode, string(out))
+	}
+	return nil
+}
+
+func machineState(node *NodeStatus, desired string) string {
+	switch {
+	case node == nil && desired == "on":
+		return "waking"
+	case node == nil:
+		return "off"
+	case !node.Ready:
+		return "unreachable"
+	case desired == "off":
+		return "sleeping"
+	}
+	return "on"
+}
+
+func listMachines(nodes []NodeStatus) []MachineStatus {
+	byName := make(map[string]*NodeStatus, len(nodes))
+	for i := range nodes {
+		byName[nodes[i].Name] = &nodes[i]
+	}
+	configured := make(map[string]bool, len(cfg.Machines))
+	machines := make([]MachineConfig, 0, len(cfg.Machines)+len(nodes))
+	for _, m := range cfg.Machines {
+		configured[m.Name] = true
+		machines = append(machines, m)
+	}
+	for _, n := range nodes {
+		if !configured[n.Name] {
+			machines = append(machines, MachineConfig{Name: n.Name})
+		}
+	}
+	sort.Slice(machines, func(i, j int) bool { return machines[i].Name < machines[j].Name })
+
+	power := readPowerConfig()
+	result := make([]MachineStatus, 0, len(machines))
+	for _, m := range machines {
+		desired := "auto"
+		if v, ok := power[m.Name]; ok && v != "" {
+			desired = v
+		}
+		result = append(result, MachineStatus{
+			Name:         m.Name,
+			PowerControl: m.PowerControl,
+			Desired:      desired,
+			State:        machineState(byName[m.Name], desired),
+			Detail:       power[m.Name+PowerStatusSuffix],
+		})
+	}
+	return result
+}
+
+func powerControlled(name string) bool {
+	for _, m := range cfg.Machines {
+		if m.Name == name {
+			return m.PowerControl
+		}
+	}
+	return false
+}
+
+func handleMachinePower(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", 405)
+		return
+	}
+	var req PowerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request"}`, 400)
+		return
+	}
+	if req.State != "on" && req.State != "off" && req.State != "auto" {
+		http.Error(w, `{"error":"state must be on, off or auto"}`, 400)
+		return
+	}
+	if !powerControlled(req.Name) {
+		http.Error(w, `{"error":"machine has no power control"}`, 403)
+		return
+	}
+	if err := writePowerDesired(req.Name, req.State); err != nil {
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	log.Printf("Machine %s power set to %s", req.Name, req.State)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -1397,6 +1641,7 @@ func main() {
 	http.HandleFunc("/api/groups/scale", handleScaleGroup)
 	http.HandleFunc("/api/nodes/cordon", handleCordonNode)
 	http.HandleFunc("/api/nodes/rebalance", handleRebalance)
+	http.HandleFunc("/api/machines/power", handleMachinePower)
 	http.HandleFunc("/api/ping/", handlePing)
 
 	log.Println("Switchboard listening on :8080")

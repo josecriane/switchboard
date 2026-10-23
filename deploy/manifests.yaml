@@ -13,7 +13,8 @@ data:
     {
       "groupNames": {},
       "noStop": [],
-      "hide": []
+      "hide": [],
+      "machines": []
     }
 ---
 apiVersion: v1
@@ -48,6 +49,34 @@ rules:
   - apiGroups: ["monitoring.coreos.com"]
     resources: ["prometheuses", "alertmanagers", "thanosrulers"]
     verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: switchboard
+  namespace: switchboard
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["switchboard-power"]
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: switchboard
+  namespace: switchboard
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: switchboard
+subjects:
+  - kind: ServiceAccount
+    name: switchboard
+    namespace: switchboard
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

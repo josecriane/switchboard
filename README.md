@@ -7,6 +7,8 @@ Not another k9s or Lens: Switchboard is built for small clusters where you want 
 ## Features
 
 - **Workload list** across all namespaces (Deployments, StatefulSets, DaemonSets) with per-workload RAM/CPU, node placement, and Traefik ingress URLs.
+- **Versions**: each workload shows the image tag of its main container. Hover the tag to see every container image.
+- **Machines tab**: physical hosts with node metrics, cordon, and an on/auto/off power switch that an external controller honors (see [Power control](#power-control)).
 - **Binary scaling**: one-click start/stop (replicas 0 or 1). No HPA, no N-replica scaling.
 - **Restart** any workload.
 - **Groups**: namespaces show up grouped in the UI; start/stop a whole group at once.
@@ -21,7 +23,7 @@ Not another k9s or Lens: Switchboard is built for small clusters where you want 
 kubectl apply -f https://raw.githubusercontent.com/josecriane/switchboard/main/deploy/manifests.yaml
 ```
 
-The manifest creates a `switchboard` namespace, a ClusterRole with the needed permissions, a Deployment, and a ClusterIP Service. Expose it behind your own Ingress or IngressRoute.
+The manifest creates a `switchboard` namespace, a ClusterRole with the needed permissions, a Role for the `switchboard-power` ConfigMap, a Deployment, and a ClusterIP Service. Expose it behind your own Ingress or IngressRoute.
 
 Image: `ghcr.io/josecriane/switchboard:latest` (multi-arch: amd64, arm64).
 
@@ -33,15 +35,38 @@ Switchboard reads `/config/services.json` on startup. The default ConfigMap ship
 {
   "groupNames": { "media": "Media" },
   "noStop": ["kube-system/*", "default/critical-thing"],
-  "hide": ["kube-system", "kube-public"]
+  "hide": ["kube-system", "kube-public"],
+  "machines": [
+    { "name": "server1" },
+    { "name": "server2", "powerControl": true }
+  ]
 }
 ```
 
 - `groupNames`: map of namespace -> display name in the UI. Unset namespaces are Title-Cased.
 - `noStop`: entries (`ns/name` or `ns/*`) that cannot be scaled to 0. Useful for critical infra.
 - `hide`: namespaces to hide entirely.
+- `machines`: physical hosts for the Machines tab, by node name. A host listed here is shown when its Node object is absent. Nodes that are not listed are shown too. `powerControl` enables the on/auto/off switch.
 
 Update the ConfigMap and restart the pod to apply.
+
+### Power control
+
+Switchboard does not wake or suspend a machine itself. The switch writes the desired state to the ConfigMap `switchboard-power` in the namespace of the pod, one key per machine. A controller of your own reads the key and acts on it.
+
+```yaml
+data:
+  server2: "on"
+  server2.status: "asleep"
+```
+
+- `<name>`: `on` or `off`. An absent key means `auto`.
+- `on`: the controller wakes the machine and keeps it awake.
+- `off`: the controller drains and suspends the machine and keeps it off.
+- `auto`: the controller follows its own policy.
+- `<name>.status`: free text that the controller can write. The UI shows it under the machine.
+
+The UI derives the state of a machine from its Node object. Present and Ready is `on`. Absent is `off`, or `waking` when the desired state is `on`. Present and not Ready is `unreachable`. Ready with the desired state `off` is `sleeping`.
 
 ### Ingress example (Traefik IngressRoute)
 

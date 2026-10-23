@@ -41,8 +41,6 @@
   .svc-kind { font-size: 0.65rem; color: #666; background: #2b2b2b; padding: 1px 5px; border-radius: 3px; }
   .svc-node { font-size: 0.65rem; color: #8ab4f8; background: #1f2937; padding: 1px 5px; border-radius: 3px; }
   .svc-status-detail { font-size: 0.7rem; color: #f85149; background: rgba(248, 81, 73, 0.1); padding: 1px 6px; border-radius: 3px; cursor: help; }
-  .node-row { margin-top: 14px; }
-  .node-circles { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; }
   .node-circle { position: relative; width: 140px; height: 140px; flex: 0 0 auto; }
   .node-circle svg { width: 100%; height: 100%; transform: rotate(-90deg); display: block; }
   .node-ring-bg { stroke: #2b2b2b; fill: none; stroke-width: 7; }
@@ -82,6 +80,29 @@
   .filter-chip { background: #1e1e1e; border: 1px solid #2b2b2b; color: #aaa; border-radius: 12px; padding: 3px 10px; cursor: pointer; font-size: 0.75rem; }
   .filter-chip:hover { border-color: #8ab4f8; color: #8ab4f8; }
   .filter-chip.active { background: rgba(138, 180, 248, 0.15); border-color: #8ab4f8; color: #8ab4f8; }
+  .tabs { display: flex; gap: 4px; background: #1e1e1e; border-radius: 6px; padding: 3px; }
+  .tab { background: none; border: none; color: #888; border-radius: 4px; padding: 4px 12px; font-size: 0.8rem; cursor: pointer; font-weight: 600; }
+  .tab:hover { color: #ccc; }
+  .tab.active { background: #2b2b2b; color: #eaeaea; }
+  .svc-version { font-size: 0.65rem; color: #aaa; background: #2b2b2b; padding: 1px 5px; border-radius: 3px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; cursor: help; }
+  .machine { display: flex; align-items: center; gap: 16px; background: #1e1e1e; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
+  .machine-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  .machine-badges { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .machine-state { font-size: 0.65rem; padding: 2px 8px; border-radius: 10px; text-transform: uppercase; letter-spacing: 0.03em; font-weight: 600; }
+  .state-on { background: rgba(46, 160, 67, 0.15); color: #3fb950; }
+  .state-off { background: #2b2b2b; color: #888; }
+  .state-waking, .state-sleeping, .state-cordoned { background: rgba(210, 153, 34, 0.15); color: #d29922; }
+  .state-unreachable { background: rgba(218, 54, 51, 0.15); color: #f85149; }
+  .machine-detail { font-size: 0.8rem; color: #888; }
+  .machine-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 0.75rem; }
+  .segmented { display: inline-flex; border: 1px solid #3a3a3a; border-radius: 4px; overflow: hidden; }
+  .segmented button { background: none; border: none; border-right: 1px solid #3a3a3a; color: #888; padding: 3px 10px; font-size: 0.7rem; cursor: pointer; font-weight: 600; }
+  .segmented button:last-child { border-right: none; }
+  .segmented button:hover { color: #ccc; }
+  .segmented button.active { background: #2b2b2b; color: #eaeaea; }
+  .segmented button.active.seg-on { color: #3fb950; }
+  .segmented button.active.seg-off { color: #f85149; }
+  .segmented button:disabled { opacity: 0.5; cursor: not-allowed; }
 
   @media (max-width: 600px) {
     body { padding: 12px; }
@@ -89,7 +110,7 @@
     .header { margin-bottom: 16px; }
     .group-header { padding: 10px 12px; }
     .group-body { padding: 0 12px 6px; }
-    .node-circles { gap: 10px; }
+    .machine { padding: 10px 12px; gap: 10px; }
     .node-circle { width: 120px; height: 120px; }
     .node-circle-name { font-size: 0.75rem; }
     .node-circle-metrics { font-size: 0.6rem; }
@@ -105,8 +126,12 @@
 </head>
 <body>
 <div class="header">
-  <div style="display:flex;justify-content:space-between;align-items:center;">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
     <h1>Switchboard</h1>
+    <nav class="tabs">
+      <button class="tab" id="tabServices" onclick="setTab('services')">Services</button>
+      <button class="tab" id="tabMachines" onclick="setTab('machines')">Machines</button>
+    </nav>
     <button class="btn-toggle-all" id="toggleAllBtn" onclick="toggleAll()">Expand</button>
   </div>
   <div class="ram-bar">
@@ -117,22 +142,33 @@
     <div class="ram-bar-fill" id="cpuFill" style="width:0%; background:#2ea043;"></div>
     <span class="ram-bar-text" id="cpuText">CPU: loading...</span>
   </div>
-  <div class="node-row" id="nodeRow"></div>
   <div class="filter-row" id="filterRow" style="display:none;"></div>
 </div>
 <div id="groups"></div>
+<div id="machines" style="display:none;"></div>
 <div class="error-toast" id="errorToast"></div>
 
 <script>
-let state = { services: [], nodes: [], ramUsed: 0, ramTotal: 0 };
+let state = { services: [], nodes: [], machines: [], ramUsed: 0, ramTotal: 0 };
 let collapsed = null;
 let busyServices = {};
 let busyNodes = {};
 let nodeFilter = null;
+let tab = location.hash === '#machines' ? 'machines' : 'services';
 
 function setNodeFilter(node) {
   nodeFilter = node;
   render();
+}
+
+function setTab(t) {
+  tab = t;
+  history.replaceState(null, '', t === 'machines' ? '#machines' : location.pathname);
+  render();
+}
+
+function setPower(name, desired) {
+  return apiCall('/api/machines/power', { name, state: desired }, 'machine:' + name);
 }
 
 async function fetchServices() {
@@ -285,61 +321,18 @@ function render() {
   cpuFill.style.background = cpuColor(cpuPct);
   document.getElementById('cpuText').textContent = 'CPU: ' + formatCPU(state.cpuUsed) + ' / ' + formatCPU(state.cpuTotal) + ' (' + cpuPct.toFixed(1) + '%)';
 
-  const nodeRow = document.getElementById('nodeRow');
-  const nodes = state.nodes || [];
-  if (nodes.length > 1) {
-    const OUTER_R = 45, INNER_R = 35;
-    const outerC = 2 * Math.PI * OUTER_R;
-    const innerC = 2 * Math.PI * INNER_R;
-    let nodeHtml = '<div class="node-circles">';
-    nodes.forEach(n => {
-      const ramPct = n.ramTotal > 0 ? (n.ramUsed / n.ramTotal * 100) : 0;
-      const cpuPct = n.cpuTotal > 0 ? (n.cpuUsed / n.cpuTotal * 100) : 0;
-      const dotColor = n.ready ? '#2ea043' : '#da3633';
-      const cordonLabel = n.unschedulable ? 'uncordon' : 'cordon';
-      const cordonClass = n.unschedulable ? 'cordoned' : '';
-      const busy = busyNodes[n.name] ? 'disabled' : '';
-      const ramOffset = outerC * (1 - Math.min(ramPct, 100) / 100);
-      const cpuOffset = innerC * (1 - Math.min(cpuPct, 100) / 100);
-      const tooltip = 'RAM ' + formatMB(n.ramUsed) + ' / ' + formatMB(n.ramTotal) +
-                      '\nCPU ' + formatCPU(n.cpuUsed) + ' / ' + formatCPU(n.cpuTotal);
-      nodeHtml += '<div class="node-circle" title="' + escapeHtml(tooltip) + '">';
-      nodeHtml += '<svg viewBox="0 0 100 100">';
-      nodeHtml += '<circle class="node-ring-bg" cx="50" cy="50" r="' + OUTER_R + '"/>';
-      nodeHtml += '<circle class="node-ring-bg" cx="50" cy="50" r="' + INNER_R + '"/>';
-      nodeHtml += '<circle class="node-ring" cx="50" cy="50" r="' + OUTER_R + '"' +
-        ' stroke="' + ramColor(ramPct) + '"' +
-        ' stroke-dasharray="' + outerC.toFixed(2) + '"' +
-        ' stroke-dashoffset="' + ramOffset.toFixed(2) + '"/>';
-      nodeHtml += '<circle class="node-ring" cx="50" cy="50" r="' + INNER_R + '"' +
-        ' stroke="' + cpuColor(cpuPct) + '"' +
-        ' stroke-dasharray="' + innerC.toFixed(2) + '"' +
-        ' stroke-dashoffset="' + cpuOffset.toFixed(2) + '"/>';
-      nodeHtml += '</svg>';
-      nodeHtml += '<div class="node-center">';
-      nodeHtml += '<div class="node-circle-name">';
-      nodeHtml += '<span class="node-dot" style="background:' + dotColor + '"></span>';
-      nodeHtml += escapeHtml(n.name);
-      nodeHtml += '</div>';
-      nodeHtml += '<div class="node-circle-metrics">';
-      nodeHtml += '<span style="color:' + ramColor(ramPct) + '">RAM ' + ramPct.toFixed(0) + '%</span>';
-      nodeHtml += '<span class="sep">·</span>';
-      nodeHtml += '<span style="color:' + cpuColor(cpuPct) + '">CPU ' + cpuPct.toFixed(0) + '%</span>';
-      nodeHtml += '</div>';
-      nodeHtml += '<button class="node-cordon-btn ' + cordonClass + '" ' + busy +
-        ' onclick="toggleCordon(\'' + escapeHtml(n.name) + '\',' + (n.unschedulable ? 'true' : 'false') + ')">' + cordonLabel + '</button>';
-      nodeHtml += '</div></div>';
-    });
-    nodeHtml += '</div>';
-    nodeRow.innerHTML = nodeHtml;
-  } else {
-    nodeRow.innerHTML = '';
-  }
+  document.getElementById('tabServices').classList.toggle('active', tab === 'services');
+  document.getElementById('tabMachines').classList.toggle('active', tab === 'machines');
+  document.getElementById('groups').style.display = tab === 'services' ? '' : 'none';
+  document.getElementById('machines').style.display = tab === 'machines' ? '' : 'none';
+  document.getElementById('toggleAllBtn').style.display = tab === 'services' ? '' : 'none';
+  document.getElementById('machines').innerHTML = renderMachines();
 
-  const multiNode = (state.nodes || []).length > 1;
+  const nodes = state.nodes || [];
+  const multiNode = nodes.length > 1;
 
   const filterRow = document.getElementById('filterRow');
-  if (multiNode) {
+  if (multiNode && tab === 'services') {
     const validNodes = nodes.map(n => n.name);
     if (nodeFilter && !validNodes.includes(nodeFilter)) nodeFilter = null;
     let filterHtml = '<span class="filter-label">Node:</span>';
@@ -422,6 +415,9 @@ function render() {
           ' title="' + escapeHtml(allHosts) + '" onclick="event.stopPropagation()">&#8599;</a>';
       }
       if (s.kind && s.kind !== 'Deployment') html += '<span class="svc-kind">' + escapeHtml(s.kind) + '</span>';
+      if (s.version) {
+        html += '<span class="svc-version" title="' + escapeHtml((s.images || []).join('\n')) + '">' + escapeHtml(s.version) + '</span>';
+      }
       if (multiNode && s.nodes && s.nodes.length > 0) {
         html += '<span class="svc-node">' + escapeHtml(s.nodes.join(', ')) + '</span>';
       }
@@ -458,6 +454,89 @@ function render() {
   document.getElementById('groups').innerHTML = html;
   const allCollapsed = Object.values(collapsed).every(v => v);
   document.getElementById('toggleAllBtn').textContent = allCollapsed ? 'Expand' : 'Collapse';
+}
+
+function nodeCircleHtml(name, n) {
+  const OUTER_R = 45, INNER_R = 35;
+  const outerC = 2 * Math.PI * OUTER_R;
+  const innerC = 2 * Math.PI * INNER_R;
+  const ramPct = n && n.ramTotal > 0 ? (n.ramUsed / n.ramTotal * 100) : 0;
+  const cpuPct = n && n.cpuTotal > 0 ? (n.cpuUsed / n.cpuTotal * 100) : 0;
+  const dotColor = !n ? '#555' : (n.ready ? '#2ea043' : '#da3633');
+  const ramOffset = outerC * (1 - Math.min(ramPct, 100) / 100);
+  const cpuOffset = innerC * (1 - Math.min(cpuPct, 100) / 100);
+  const tooltip = n
+    ? 'RAM ' + formatMB(n.ramUsed) + ' / ' + formatMB(n.ramTotal) + '\nCPU ' + formatCPU(n.cpuUsed) + ' / ' + formatCPU(n.cpuTotal)
+    : 'Not in the cluster';
+  let html = '<div class="node-circle" title="' + escapeHtml(tooltip) + '">';
+  html += '<svg viewBox="0 0 100 100">';
+  html += '<circle class="node-ring-bg" cx="50" cy="50" r="' + OUTER_R + '"/>';
+  html += '<circle class="node-ring-bg" cx="50" cy="50" r="' + INNER_R + '"/>';
+  if (n) {
+    html += '<circle class="node-ring" cx="50" cy="50" r="' + OUTER_R + '"' +
+      ' stroke="' + ramColor(ramPct) + '"' +
+      ' stroke-dasharray="' + outerC.toFixed(2) + '"' +
+      ' stroke-dashoffset="' + ramOffset.toFixed(2) + '"/>';
+    html += '<circle class="node-ring" cx="50" cy="50" r="' + INNER_R + '"' +
+      ' stroke="' + cpuColor(cpuPct) + '"' +
+      ' stroke-dasharray="' + innerC.toFixed(2) + '"' +
+      ' stroke-dashoffset="' + cpuOffset.toFixed(2) + '"/>';
+  }
+  html += '</svg>';
+  html += '<div class="node-center">';
+  html += '<div class="node-circle-name">';
+  html += '<span class="node-dot" style="background:' + dotColor + '"></span>';
+  html += escapeHtml(name);
+  html += '</div>';
+  if (n) {
+    html += '<div class="node-circle-metrics">';
+    html += '<span style="color:' + ramColor(ramPct) + '">RAM ' + ramPct.toFixed(0) + '%</span>';
+    html += '<span class="sep">·</span>';
+    html += '<span style="color:' + cpuColor(cpuPct) + '">CPU ' + cpuPct.toFixed(0) + '%</span>';
+    html += '</div>';
+  }
+  html += '</div></div>';
+  return html;
+}
+
+function renderMachines() {
+  const nodesByName = {};
+  (state.nodes || []).forEach(n => { nodesByName[n.name] = n; });
+  let html = '';
+  (state.machines || []).forEach(m => {
+    const n = nodesByName[m.name];
+    const busy = busyServices['machine:' + m.name] || busyNodes[m.name];
+    html += '<div class="machine">';
+    html += nodeCircleHtml(m.name, n);
+    html += '<div class="machine-info">';
+    html += '<div class="machine-badges">';
+    html += '<span class="machine-state state-' + escapeHtml(m.state) + '">' + escapeHtml(m.state) + '</span>';
+    if (n && n.unschedulable) html += '<span class="machine-state state-cordoned">cordoned</span>';
+    if (m.powerControl && m.desired !== 'auto') html += '<span class="machine-detail">switched ' + escapeHtml(m.desired) + '</span>';
+    html += '</div>';
+    if (m.detail) html += '<div class="machine-detail">' + escapeHtml(m.detail) + '</div>';
+    if (n) {
+      html += '<div class="machine-detail">RAM ' + formatMB(n.ramUsed) + ' / ' + formatMB(n.ramTotal) +
+        ' &middot; CPU ' + formatCPU(n.cpuUsed) + ' / ' + formatCPU(n.cpuTotal) + '</div>';
+    }
+    html += '<div class="machine-actions">';
+    if (m.powerControl) {
+      html += '<span class="filter-label">Power</span><div class="segmented">';
+      ['on', 'auto', 'off'].forEach(s => {
+        html += '<button class="seg-' + s + (m.desired === s ? ' active' : '') + '" ' + (busy ? 'disabled' : '') +
+          ' onclick="setPower(\'' + escapeHtml(m.name) + '\',\'' + s + '\')">' + s + '</button>';
+      });
+      html += '</div>';
+    }
+    if (n) {
+      html += '<button class="node-cordon-btn ' + (n.unschedulable ? 'cordoned' : '') + '" ' + (busy ? 'disabled' : '') +
+        ' onclick="toggleCordon(\'' + escapeHtml(n.name) + '\',' + (n.unschedulable ? 'true' : 'false') + ')">' +
+        (n.unschedulable ? 'uncordon' : 'cordon') + '</button>';
+    }
+    html += '</div></div></div>';
+  });
+  if (!html) html = '<div class="machine-detail">No machines.</div>';
+  return html;
 }
 
 function toggleGroup(group) {

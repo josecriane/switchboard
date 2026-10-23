@@ -30,7 +30,7 @@
         let
           bin = pkgs.buildGoModule {
             pname = "switchboard";
-            version = "0.1.0";
+            version = "0.2.0";
             src = ./.;
             vendorHash = null;
             subPackages = [ "." ];
